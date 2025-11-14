@@ -1,4 +1,4 @@
-name: Build and Push to Docker Hub
+name: Build and Push Multi-Arch Image
 
 on:
   push:
@@ -8,9 +8,11 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
-      - name: Checkout Dockerfile repo (this repo)
+      - name: Checkout this repo (Dockerfile)
         uses: actions/checkout@v4
 
       - name: Checkout app repo
@@ -18,8 +20,10 @@ jobs:
         with:
           repository: swimlane/devops-practical
           path: app
-          # Optional: pin to a branch/ref/sha
-          # ref: main
+          # ref: main  # optionally pin a branch/ref
+
+      - name: Set up QEMU (for ARM emulation)
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -30,18 +34,17 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push (multi-arch)
         uses: docker/build-push-action@v6
         with:
           context: ./app
           file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/swimdockerapp:v1
             ${{ secrets.DOCKERHUB_USERNAME }}/swimdockerapp:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/swimdockerapp:${{ github.sha }}
-          # Optional: speed up rebuilds with GitHub Actions cache
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Optional: pass a faster npm registry mirror to speed builds
           build-args: |
             NPM_REGISTRY=https://registry.npmmirror.com
