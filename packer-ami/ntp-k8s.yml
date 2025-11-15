@@ -1,0 +1,165 @@
+---
+- name: Prepare Kubernetes worker nodes
+  hosts: workers
+  become: true
+  gather_facts: true
+
+  vars:
+    # Versions for Ubuntu; AL2023 repos provide current kube components
+    kubernetes_version: "1.30"
+    containerd_version: "1.7.*"
+
+  pre_tasks:
+    - name: Ensure package index is up-to-date
+      package:
+        name: "*"
+        state: latest
+      when: ansible_os_family in ["RedHat", "Amazon"]
+
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+
+  tasks:
+    # NTP/chrony
+    - name: Install chrony/ntp
+      package:
+        name: "{{ (ansible_os_family in ['RedHat','Amazon','Rocky','OracleLinux']) | ternary('chrony', 'ntp') }}"
+        state: present
+
+    - name: Enable and start time sync service
+      service:
+        name: "{{ (ansible_os_family in ['RedHat','Amazon','Rocky','OracleLinux']) | ternary('chronyd', 'ntp') }}"
+        enabled: true
+        state: started
+
+    # Kernel sysctls for k8s
+    - name: Enable netfilter on bridge and forwarding
+      copy:
+        dest: /etc/sysctl.d/99-kubernetes-cri.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward = 1
+      notify: Reload sysctl
+
+    - name: Ensure br_netfilter module is loaded
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Disable swap at runtime
+      command: swapoff -a
+      when: ansible_swaptotal_mb | int > 0
+      changed_when: false
+
+    - name: Remove any swap entries from fstab
+      replace:
+        path: /etc/fstab
+        regexp: '^\s*([^#]\S+)\s+\S+\s+swap\s+'
+        replace: '# \1 swap was disabled for Kubernetes'
+      notify: Remount fs
+
+    # Container runtime: containerd
+    - name: Install containerd (Amazon/RHEL family)
+      package:
+        name: containerd
+        state: present
+      when: ansible_os_family in ["RedHat","Amazon"]
+
+    - name: Install containerd (Ubuntu)
+      apt:
+        name: "containerd"
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Generate containerd default config
+      shell: "containerd config default > /etc/containerd/config.toml"
+      args: { creates: /etc/containerd/config.toml }
+
+    - name: Ensure SystemdCgroup=true for containerd
+      lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: '^\s*SystemdCgroup\s*=\s*false'
+        line: '            SystemdCgroup = true'
+      notify: Restart containerd
+
+    - name: Enable and start containerd
+      service:
+        name: containerd
+        enabled: true
+        state: started
+
+    # Kubernetes packages
+    - name: Add Kubernetes repo (Amazon Linux 2023)
+      copy:
+        dest: /etc/yum.repos.d/kubernetes.repo
+        content: |
+          [kubernetes]
+          name=Kubernetes
+          baseurl=https://pkgs.k8s.io/core:/kubernetes:/stable:/v{{ kubernetes_version }}/rpm/
+          enabled=1
+          gpgcheck=1
+          gpgkey=https://pkgs.k8s.io/core:/kubernetes:/stable:/v{{ kubernetes_version }}/rpm/repodata/repomd.xml.key
+      when: ansible_distribution == "Amazon"
+
+    - name: Add Kubernetes repo (Ubuntu)
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/kubernetes:/stable:/v{{ kubernetes_version }}/deb/ /"
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Add Kubernetes apt keyring (Ubuntu)
+      shell: |
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://pkgs.k8s.io/core:/kubernetes:/stable:/v{{ kubernetes_version }}/deb/Release.key | \
+          gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      when: ansible_os_family == "Debian"
+
+    - name: apt update (Ubuntu)
+      apt:
+        update_cache: true
+      when: ansible_os_family == "Debian"
+
+    - name: Install kubelet, kubeadm, kubectl
+      package:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+    - name: Enable kubelet
+      service:
+        name: kubelet
+        enabled: true
+        state: stopped   # starts after kubeadm join
+
+    # Optional: AWS SSM agent (for remote mgmt)
+    - name: Ensure amazon-ssm-agent installed (Amazon/RHEL)
+      package:
+        name: amazon-ssm-agent
+        state: present
+      when: ansible_os_family in ["RedHat","Amazon"]
+
+    - name: Enable/start SSM agent
+      service:
+        name: amazon-ssm-agent
+        enabled: true
+        state: started
+      when: ansible_os_family in ["RedHat","Amazon"]
+
+  handlers:
+    - name: Reload sysctl
+      command: sysctl --system
+    - name: Restart containerd
+      service:
+        name: containerd
+        state: restarted
+    - name: Remount fs
+      command: mount -a

@@ -1,0 +1,2 @@
+ansible_connection: community.aws.aws_ssm
+ansible_user: ec2-user

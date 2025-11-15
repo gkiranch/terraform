@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "swimdockerapp.fullname" . }}
+  labels:
+    {{- include "swimdockerapp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "swimdockerapp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "swimdockerapp.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: app
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: {{ .Values.env.nodeEnv | quote }}
+            - name: MONGO_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{- if .Values.mongodb.existingConfigMap }} {{ .Values.mongodb.existingConfigMap }} {{- else }} {{ include "swimdockerapp.fullname" . }}-mongodb {{- end }}
+                  key: {{ .Values.mongodb.hostKey }}
+            - name: MONGO_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: {{- if .Values.mongodb.existingConfigMap }} {{ .Values.mongodb.existingConfigMap }} {{- else }} {{ include "swimdockerapp.fullname" . }}-mongodb {{- end }}
+                  key: {{ .Values.mongodb.dbKey }}
+            - name: MONGO_OPTIONS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{- if .Values.mongodb.existingConfigMap }} {{ .Values.mongodb.existingConfigMap }} {{- else }} {{ include "swimdockerapp.fullname" . }}-mongodb {{- end }}
+                  key: {{ .Values.mongodb.optionsKey }}
+                  optional: true
+            - name: MONGO_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{- if .Values.mongodb.existingSecret }} {{ .Values.mongodb.existingSecret }} {{- else }} {{ include "swimdockerapp.fullname" . }}-mongodb-credentials {{- end }}
+                  key: {{ .Values.mongodb.usernameKey }}
+            - name: MONGO_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{- if .Values.mongodb.existingSecret }} {{ .Values.mongodb.existingSecret }} {{- else }} {{ include "swimdockerapp.fullname" . }}-mongodb-credentials {{- end }}
+                  key: {{ .Values.mongodb.passwordKey }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          command: ["/bin/sh","-c"]
+          args:
+            - |
+              set -e
+              URI="mongodb://$MONGO_USERNAME:$MONGO_PASSWORD@$MONGO_HOST/$MONGO_DB"
+              if [ -n "$MONGO_OPTIONS" ]; then URI="$URI?$MONGO_OPTIONS"; fi
+              export MONGODB_URL="$URI"
+              exec node server.js

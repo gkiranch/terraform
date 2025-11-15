@@ -1,0 +1,58 @@
+image:
+  repository: docker.io/gkiranch/swimdockerapp
+  tag: "v1"
+  pullPolicy: IfNotPresent
+  # Optionally override registry mirror for npm at build time (not used at runtime)
+
+replicaCount: 2
+
+service:
+  type: ClusterIP
+  port: 3000
+
+env:
+  nodeEnv: development
+
+mongodb:
+  # ConfigMap carrying non-sensitive connection parts (service/host, db, options)
+  existingConfigMap: ""
+  hostKey: MONGO_HOST
+  dbKey: MONGO_DB
+  optionsKey: MONGO_OPTIONS
+  # If not using an existing ConfigMap, populate values below to create one
+  host: "mongo-db.mongo.svc.cluster.local:27017"
+  db: "admin"
+  options: "authSource=admin"
+
+  # Secret carrying credentials
+  existingSecret: "mongo-db-credentials"
+  usernameKey: username
+  passwordKey: password
+  # If not using an existing Secret, populate to create one
+  username: ""
+  password: ""
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: swimdockerapp.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources: {}
+  # limits:
+  #   cpu: 200m
+  #   memory: 256Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
